@@ -758,9 +758,8 @@ class HyperbandSearch(object):
 
         # Set configuration
         assert("epochs" in self.param_names)
+        configuration[self.param_names.index("epochs")] = n_epochs
         for pn, pv in zip(self.param_names, configuration):
-            if self.param_names == "epochs":
-                pv = n_epochs
             hps[pn] = pv        
 
         # Dbg print
