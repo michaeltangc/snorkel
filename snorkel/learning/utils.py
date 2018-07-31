@@ -624,6 +624,9 @@ class HyperbandSearch(object):
                  model_class_params={}, model_hyperparams={}, 
                  save_dir='checkpoints', seed=123):
 
+        # Make sure that "epochs" in parameter_dict
+        parameter_dict["epochs"] = [0]
+
         # Set search parameters. 
         # TODO(maxlam): perhaps refactor basic search functionality (from GridSearch) into superclass?
         self.model_class        = model_class
@@ -754,7 +757,10 @@ class HyperbandSearch(object):
         model_name = '{0}_{1}'.format(model.name, model_id)
 
         # Set configuration
+        assert("epochs" in self.param_names)
         for pn, pv in zip(self.param_names, configuration):
+            if self.param_names == "epochs":
+                pv = n_epochs
             hps[pn] = pv        
 
         # Dbg print
@@ -790,7 +796,7 @@ class HyperbandSearch(object):
             run_score  = run_scores[-1]
             run_score_label = "F-{0} Score".format(beta)
 
-        return model, run_score, model_name, list(configuration) + list(run_scores) + [n_epochs]
+        return model, run_score, model_name, list(configuration) + list(run_scores)
         
     def _fit_st(self, X_valid, Y_valid, b=0.5, beta=1,
         set_unlabeled_as_neg=True, eval_batch_size=None):
@@ -853,7 +859,7 @@ class HyperbandSearch(object):
             ['Prec.', 'Rec.', f_score]
         sort_by = 'Acc.' if opt_model.cardinality > 2 else f_score
         self.results = DataFrame.from_records(
-            run_stats, columns=self.param_names + run_score_labels + ["epochs"]
+            run_stats, columns=self.param_names + run_score_labels
         ).sort_values(by=sort_by, ascending=False)
 
         return opt_model, self.results
