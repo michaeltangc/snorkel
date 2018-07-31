@@ -744,7 +744,7 @@ class HyperbandSearch(object):
     def search_space(self):
         return product(*[self.parameter_dict[pn] for pn in self.param_names])
 
-    def evaluate_configuration(self, configuration, model_id, n_epochs, 
+    def evaluate_configuration(self, configuration, model_id, 
                                X_valid, Y_valid, b=0.5, beta=1,
                                set_unlabeled_as_neg=True, eval_batch_size=None):
         """
@@ -757,16 +757,13 @@ class HyperbandSearch(object):
         model_name = '{0}_{1}'.format(model.name, model_id)
 
         # Set configuration
-        assert("epochs" in self.param_names)
-        configuration[self.param_names.index("epochs")] = n_epochs
         for pn, pv in zip(self.param_names, configuration):
             hps[pn] = pv        
 
         # Dbg print
         print("="*60)
         print("[%d] Testing " % model_id 
-              + ", ".join(["%s = %s" % (pname, pvalue) for pname, pvalue in zip(self.param_names, configuration)])
-              + " for %d epochs" % n_epochs)
+              + ", ".join(["%s = %s" % (pname, pvalue) for pname, pvalue in zip(self.param_names, configuration)]))
         print("="*60)
 
         # Train the model
@@ -821,7 +818,13 @@ class HyperbandSearch(object):
                 # Evaluate each configuration for r_i epochs
                 scored_configurations = []
                 for configuration in configurations:
-                    model, score, model_name, run_stat = self.evaluate_configuration(configuration, model_id, r_i,
+                    
+                    # Set epochs of configuration
+                    configuration_list = list(configuration)
+                    assert("epochs" in self.param_names)
+                    configuration_list[self.param_names.index("epochs")] = r_i
+
+                    model, score, model_name, run_stat = self.evaluate_configuration(configuration_list, model_id,
                                                                                      X_valid, Y_valid, 
                                                                                      b=b, beta=beta, 
                                                                                      set_unlabeled_as_neg=set_unlabeled_as_neg,
