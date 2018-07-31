@@ -7,6 +7,7 @@ standard_library.install_aliases()
 
 import os
 import math
+import random
 import numpy as np
 import scipy.sparse as sparse
 import warnings
@@ -599,6 +600,266 @@ class RandomSearch(GridSearch):
         return list(zip(*[self.rand_state.choice(self.parameter_dict[pn], self.n)
             for pn in self.param_names]))
 
+class HyperbandSearch(object):
+    """
+    Performs hyperparameter search according to the Hyperband algorithm (https://arxiv.org/pdf/1603.06560.pdf).
+
+    :param model_class: The model class being trained
+    :param parameter_dict: A dictionary of (hyperparameter name, list of values). 
+        Important: Make sure that epochs is not among the keys, as it will be overriden by the 
+        hyperband algorithm
+    :param hyperband_epochs_budget: Number of total epochs of training to perform in search. 
+    :param X_train: Training set.
+    :param Y_train: If applicable, training labels.
+    :param hyperband_proportion_discard: proportion of configurations to discard in each round of Hyperband's SuccessiveHalving. An integer.
+    :param model_class_params: Params passed to model class construction.
+    :param model_hyperparams: Extra hyperparameters passed to model during training.
+    :param save_dir: Directory to save checkpoints.
+    :param seed: Random seed for random sampling of hyperparameters.
+    """
+    def __init__(self, model_class, parameter_dict, 
+                 hyperband_epochs_budget, 
+                 X_train, Y_train=None, 
+                 hyperband_proportion_discard=3,
+                 model_class_params={}, model_hyperparams={}, 
+                 save_dir='checkpoints', seed=123):
+
+        # Set search parameters. 
+        # TODO(maxlam): perhaps refactor basic search functionality (from GridSearch) into superclass?
+        self.model_class        = model_class
+        self.parameter_dict     = parameter_dict
+        self.param_names        = list(parameter_dict)
+        self.X_train            = X_train
+        self.Y_train            = Y_train
+        self.model_class_params = model_class_params
+        self.model_hyperparams  = model_hyperparams
+        self.save_dir           = os.path.join(save_dir, 'grid_search')
+
+        # Hyperband parameters
+        self.hyperband_epochs_budget = hyperband_epochs_budget
+        self.hyperband_proportion_discard = hyperband_proportion_discard
+
+        # Given the budget, generate the largest hyperband schedule within budget
+        self.hyperband_schedule = self.get_largest_hyperband_schedule_within_budget(self.hyperband_epochs_budget,
+                                                                                    self.hyperband_proportion_discard)
+        
+        # Print the search schedule
+        self.pretty_print_schedule(self.hyperband_schedule)    
+
+    def pretty_print_schedule(self, hyperband_schedule, describe_hyperband=True):
+        """
+        Prints scheduler for user to read.
+        """
+        print("Hyperband Schedule")
+        print("-----------------------------------------")
+        if describe_hyperband:
+            # Print a message indicating what the below schedule means
+            print("Table consists of tuples of (num configs, num_resources_per_config) which specify "
+                  "how many configs to run and for how many epochs. ")
+            print("Each bracket starts with a list of random configurations which is successively halved "
+                  "according the schedule.")
+            print("See the Hyperband paper (https://arxiv.org/pdf/1603.06560.pdf) for more details.")
+            print("-----------------------------------------")
+        for bracket_index, bracket in enumerate(hyperband_schedule):
+            bracket_string = "Bracket %d:" % bracket_index
+            for n_i,r_i in bracket:
+                bracket_string += " (%d, %d)" % (n_i, r_i)
+            print(bracket_string)
+        print("-----------------------------------------")
+    
+    def get_largest_hyperband_schedule_within_budget(self, budget, proportion_discard):
+        """
+        Gets the largest hyperband schedule within target_budget.
+        This is required since the original hyperband algorithm uses R, the maximum number of resources per configuration.
+        TODO(maxlam): Possibly binary search it if this becomes a bottleneck.
+        
+        :param budget: total budget of the schedule.
+        :param proportion_discard: hyperband parameter that specifies the proportion of configurations to discard per iteration.
+        """
+        
+        # Exhaustively generate schedules and check if they're within budget, adding to a list.
+        valid_schedules_and_costs = []
+        for R in range(1, budget):
+            schedule = self.generate_hyperband_schedule(R, proportion_discard)
+            cost = self.compute_schedule_cost(schedule)
+            if cost <= budget:
+                valid_schedules_and_costs.append((schedule, cost))
+
+        # Choose a valid schedule that maximizes usage of the budget.
+        valid_schedules_and_costs.sort(key=lambda x:x[1], reverse=True)
+        return valid_schedules_and_costs[0][0]
+
+    def compute_schedule_cost(self, schedule):
+        # Sum up all n_i * r_i for each band.
+        flattened = [item for sublist in schedule for item in sublist]
+        return sum([x[0]*x[1] for x in flattened])
+
+    def generate_hyperband_schedule(self, R, eta):
+        """
+        Generate hyperband schedule according to the paper.
+        :param R: maximum resources per config.
+        :param eta: proportion of configruations to discard per iteration of successive halving.        
+        :return hyperband schedule, which is represented as a list of brackets, where each bracket contains
+            a list of (num configurations, num resources to use per configuration). See the paper for more details.
+        """
+        schedule = []
+        s_max = int(math.floor(math.log(R, eta)))
+        B = (s_max + 1) * R        
+        for s in range(0, s_max+1):
+            n = math.ceil(int((s_max+1)/(s+1)) * eta**s)
+            r = R*eta**(-s)
+            num_hyperparameters = n
+            bracket = []
+            for i in range(0, s+1):
+                n_i = int(math.floor(n*eta**(-i)))
+                r_i = int(r*eta**i)
+                num_hyperparameters = math.floor(n_i / eta)
+                bracket.append((n_i, r_i))
+            schedule = [bracket] + schedule
+        return schedule
+
+    def fit(self, X_valid, Y_valid, b=0.5, beta=1, set_unlabeled_as_neg=True, 
+            n_threads=1, eval_batch_size=None):
+        """
+        Perform hyperband
+
+        :param b: Scoring decision threshold (binary)
+        :param beta: F_beta score to select model by (binary)
+        :param set_unlabeled_as_neg: Set labels = 0 -> -1 (binary)
+        :param n_threads: Parallelism to use for the grid search
+        :param eval_batch_size: The batch_size for model evaluation
+        """
+        
+        # TODO(maxlam): implement multithreaded hyperband
+        if n_threads > 1:
+            raise Exception("HyperbandSearcher doesn't support multiprocessing yet.")
+        
+        return self._fit_st(X_valid, Y_valid, b=b, 
+                            beta=beta, set_unlabeled_as_neg=set_unlabeled_as_neg, 
+                            eval_batch_size=eval_batch_size)
+
+    def search_space(self):
+        return product(*[self.parameter_dict[pn] for pn in self.param_names])
+
+    def evaluate_configuration(self, configuration, model_id, n_epochs, 
+                               X_valid, Y_valid, b=0.5, beta=1,
+                               set_unlabeled_as_neg=True, eval_batch_size=None):
+        """
+        Evaluate configuration for n_epochs and test on X_valid and Y_valid. 
+        """
+        
+        # Create model
+        hps = self.model_hyperparams.copy()
+        model = self.model_class(**self.model_class_params)
+        model_name = '{0}_{1}'.format(model.name, model_id)
+
+        # Set configuration
+        for pn, pv in zip(self.param_names, configuration):
+            hps[pn] = pv
+            
+        # Override epochs
+        hps["epochs"] = n_epochs
+
+        # Dbg print
+        print("="*60)
+        print("[%d] Testing " % model_id 
+              + ", ".join(["%s = %s" % (pname, pvalue) for pname, pvalue in zip(self.param_names, configuration)])
+              + " for %d epochs" % n_epochs)
+        print("="*60)
+
+        # Train the model
+        train_args = [self.X_train]
+        if self.Y_train is not None:
+            train_args.append(self.Y_train)        
+            
+        # Pass in the dev set to the train method if applicable, for dev set
+        # score printing, best-score checkpointing
+        # Note: Need to set the save directory since passing in
+        # (X_dev, Y_dev) will by default trigger checkpoint saving
+        try:
+            model.train(*train_args, X_dev=X_valid, Y_dev=Y_valid, 
+                         save_dir=self.save_dir, **hps)
+        except:
+            model.train(*train_args, **hps)
+
+        # Test the model
+        run_scores = model.score(X_valid, Y_valid, b=b, beta=beta,
+            set_unlabeled_as_neg=set_unlabeled_as_neg,
+            batch_size=eval_batch_size)
+        if model.cardinality > 2:
+            run_score, run_score_label = run_scores, "Accuracy"
+            run_scores = [run_score]
+        else:
+            run_score  = run_scores[-1]
+            run_score_label = "F-{0} Score".format(beta)
+
+        return model, run_score, model_name, list(configuration) + list(run_scores)
+        
+    def _fit_st(self, X_valid, Y_valid, b=0.5, beta=1,
+        set_unlabeled_as_neg=True, eval_batch_size=None):
+        """Single-threaded implementation of Hyperband"""
+
+        all_configurations = list(self.search_space())
+        model_id = 0
+        run_stats = []
+
+        # Loop over each bracket
+        for bracket_index, bracket in enumerate(self.hyperband_schedule):
+            
+            # Sample random configurations to seed SuccessiveHalving
+            n_starting_configurations, _ = bracket[0]
+            configurations = [random.choice(all_configurations) for i in range(n_starting_configurations)]
+            best_configuration_name, best_score = None, float("-inf")
+
+            # Successive Halving
+            for band_index, (n_i, r_i) in enumerate(bracket):
+                
+                assert(len(configurations) == n_i)
+
+                # Evaluate each configuration for r_i epochs
+                scored_configurations = []
+                for configuration in configurations:
+                    model, score, model_name, run_stat = self.evaluate_configuration(configuration, model_id, r_i,
+                                                                                     X_valid, Y_valid, 
+                                                                                     b=b, beta=beta, 
+                                                                                     set_unlabeled_as_neg=set_unlabeled_as_neg,
+                                                                                     eval_batch_size=eval_batch_size)
+                    scored_configurations.append((model, score, model_name, configuration))
+                    run_stats.append(run_stat)
+                    model_id += 1
+
+                scored_configurations.sort(key=lambda x: x[1], reverse=True)
+
+                # Update the best configuration and score
+                for model, score, model_name, configuration in scored_configurations:
+                    if score > best_score:
+                        best_configuration_name, best_score = model_name, score
+                        
+                        # Save model
+                        model.save(model_name=model_name, save_dir=self.save_dir)
+                        model.save(model_name="{0}_best".format(model.name), 
+                                   save_dir=self.save_dir)
+
+
+                # Successively halve the configurations
+                if band_index+1 < len(bracket):
+                    n_to_keep, _ = bracket[band_index+1]
+                    configurations = [x[3] for x in scored_configurations][:n_to_keep]
+
+        # Set optimal parameter in the learner model
+        opt_model = self.model_class(**self.model_class_params)
+        opt_model.load(best_configuration_name, save_dir=self.save_dir)
+        
+        # Return optimal model & DataFrame of scores
+        f_score = 'F-{0}'.format(beta)
+        run_score_labels = ['Acc.'] if opt_model.cardinality > 2 else \
+            ['Prec.', 'Rec.', f_score]
+        sort_by = 'Acc.' if opt_model.cardinality > 2 else f_score
+        self.results = DataFrame.from_records(
+            run_stats, columns=self.param_names + run_score_labels
+        ).sort_values(by=sort_by, ascending=False)
+
+        return opt_model, self.results
 
 ############################################################
 ### Utility functions for annotation matrices
