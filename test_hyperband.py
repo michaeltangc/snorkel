@@ -22,3 +22,5 @@ param_ranges = {
 searcher = HyperbandSearch(GenerativeModel, param_ranges, 30, L_train)
 
 gen_model, run_stats = searcher.fit(L_dev, L_gold_dev)
+
+print(run_stats)

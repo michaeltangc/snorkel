@@ -755,10 +755,7 @@ class HyperbandSearch(object):
 
         # Set configuration
         for pn, pv in zip(self.param_names, configuration):
-            hps[pn] = pv
-            
-        # Override epochs
-        hps["epochs"] = n_epochs
+            hps[pn] = pv        
 
         # Dbg print
         print("="*60)
@@ -793,7 +790,7 @@ class HyperbandSearch(object):
             run_score  = run_scores[-1]
             run_score_label = "F-{0} Score".format(beta)
 
-        return model, run_score, model_name, list(configuration) + list(run_scores)
+        return model, run_score, model_name, list(configuration) + list(run_scores) + [n_epochs]
         
     def _fit_st(self, X_valid, Y_valid, b=0.5, beta=1,
         set_unlabeled_as_neg=True, eval_batch_size=None):
@@ -856,7 +853,7 @@ class HyperbandSearch(object):
             ['Prec.', 'Rec.', f_score]
         sort_by = 'Acc.' if opt_model.cardinality > 2 else f_score
         self.results = DataFrame.from_records(
-            run_stats, columns=self.param_names + run_score_labels
+            run_stats, columns=self.param_names + run_score_labels + ["epochs"]
         ).sort_values(by=sort_by, ascending=False)
 
         return opt_model, self.results
