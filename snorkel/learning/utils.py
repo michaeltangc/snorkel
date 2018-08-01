@@ -653,8 +653,9 @@ class HyperbandSearch(object):
         """
         Prints scheduler for user to read.
         """
-        print("Hyperband Schedule")
-        print("-----------------------------------------")
+        print("=========================================")
+        print("|           Hyperband Schedule          |")
+        print("=========================================")
         if describe_hyperband:
             # Print a message indicating what the below schedule means
             print("Table consists of tuples of (num configs, num_resources_per_config) which specify "
@@ -735,7 +736,9 @@ class HyperbandSearch(object):
         
         # TODO(maxlam): implement multithreaded hyperband
         if n_threads > 1:
-            raise Exception("HyperbandSearcher doesn't support multiprocessing yet.")
+            return self._fit_mt(X_valid, Y_valid, b=b,
+                                beta=beta, set_unlabeled_as_neg=set_unlabeled_as_neg,
+                                eval_batch_size=eval_batch_size)
         
         return self._fit_st(X_valid, Y_valid, b=b, 
                             beta=beta, set_unlabeled_as_neg=set_unlabeled_as_neg, 
@@ -793,7 +796,173 @@ class HyperbandSearch(object):
             run_score_label = "F-{0} Score".format(beta)
 
         return model, run_score, model_name, list(configuration) + list(run_scores)
+
+    def _fit_mt(self, X_valid, Y_valid, b=0.5, beta=1, 
+                set_unlabeled_as_neg=True, n_threads=4, eval_batch_size=None):
+        """
+        Multi-threaded implementation of Hyperband.
+
+        Parallelize both jobs within a band, and across brackets. 
+        For example, suppose we have the schedule:
         
+        Bracket 0: (3, 2) (1, 8)
+        Bracket 1: (2, 8)
+
+        For each (n_i, r_i) we can parallelize jobs;
+        and we can also parallelize the brackets
+        (e.g: do bracket 0 and 1 in parallel).
+
+        """
+        
+        # Create results queue and params queue
+        params_queue = JoinableQueue()
+        scores_queue = JoinableQueue()
+
+        # Create a pool of testers
+        model_testers = [ModelTester(self.model_class, self.model_class_params,
+                                     params_queue, scores_queue, self.X_train, X_valid, Y_valid,
+                                     Y_train=self.Y_train, b=b, save_dir=self.save_dir,
+                                     set_unlabeled_as_neg=set_unlabeled_as_neg,
+                                     eval_batch_size=eval_batch_size, beta=beta) for i in range(n_threads)]
+        for model_tester in model_testers:
+            model_tester.start()
+
+        # Create a list of starting configurations for each bracket
+        all_configurations = list(self.search_space())
+
+        # This data structure keeps track of which configurations need to be processed / have been processed / is processing
+        # for each band and bracket
+        configuration_statuses_per_bracket_per_band = (
+            [[{"to_process" : [], "processing" : [], "finished": []} for band in bracket] for bracket in self.hyperband_schedule])
+
+        # Seed the first bands of each bracket with random configurations
+        for bracket_index, bracket in enumerate(self.hyperband_schedule):
+            configuration_statuses_per_bracket_per_band[bracket_index][0]["to_process"] = (
+                [random.choice(all_configurations) for i in range(bracket[0][0])])    
+
+        # Global run id to keep track of configurations
+        global_run_id = 0
+
+        # Dictionary mapping all configurations => score/model_name/etc
+        configuration_results = {}
+        run_id_to_configuration = {}
+        
+        # Which band within a bracket is currently being proessed
+        band_indices = [0 for bracket in self.hyperband_schedule]
+        bracket_lengths = [len(x) for x in self.hyperband_schedule]
+
+        # Submit jobs to the threads until we've finished all the brackets
+        while any([b_index < b_length for b_index, b_length in zip(band_indices, bracket_lengths)]):
+
+            # Launch jobs that are ready to go
+            for bracket_index, bracket_statuses in enumerate(configuration_statuses_per_bracket_per_band):
+                band_index = band_indices[bracket_index]
+                if band_index >= len(bracket_statuses):
+                    continue
+                configurations_to_run = bracket_statuses[band_index]["to_process"]
+                configurations_processing = bracket_statuses[band_index]["processing"]
+                epochs_per_config_for_band = self.hyperband_schedule[bracket_index][band_index][1]
+
+                while len(configurations_to_run) > 0:
+                    
+                    # Get configuration to run
+                    configuration = configurations_to_run.pop()
+
+                    # Override configuration num epochs
+                    configuration_list = list(configuration)
+                    assert("epochs" in self.param_names)
+                    print(configuration_list)
+                    configuration_list[self.param_names.index("epochs")] = epochs_per_config_for_band
+                    configuration = tuple(configuration_list)
+                    
+                    # Submit job
+                    assert(global_run_id not in run_id_to_configuration)
+                    run_id_to_configuration[global_run_id] = configuration
+                    job_map = {}
+                    for pn, pv in zip(self.param_names, configuration):
+                        job_map[pn] = pv
+                    job_tuple = (global_run_id, job_map)
+                    print("Master thread submitting configuration for scoring: %s" % str(job_tuple))
+                    params_queue.put(job_tuple)
+                    
+                    # Add the configuration to the processing list
+                    configurations_processing.append(configuration)
+
+                    global_run_id += 1                    
+
+            # Poll for results, add finished results to global dict
+            try:
+                scores = scores_queue.get(True, QUEUE_TIMEOUT)
+                run_id = scores[0]
+                configuration_which_finished = run_id_to_configuration[run_id]
+                configuration_results[configuration_which_finished] = (run_id, scores[-1])
+                print("Master thread polling for results... Got configuration %s with score %s" % (str(configuration_which_finished), str(scores[-1])))
+            except Empty:
+                print("EMPT")
+                continue
+
+            # Aggregate results; check if configuration finished and transfer to finished list
+            for bracket_index, bracket_statuses in enumerate(configuration_statuses_per_bracket_per_band):
+                band_index = band_indices[bracket_index]
+                if band_index >= len(bracket_statuses):
+                    continue
+                configurations_to_run = bracket_statuses[band_index]["to_process"]
+                configurations_processing = bracket_statuses[band_index]["processing"]
+                configurations_finished = bracket_statuses[band_index]["finished"]
+                assert(len(configurations_to_run) == 0)
+
+                # Transfer any configurations that finished from the processing list to the finished list
+                if configuration_which_finished in configurations_processing:
+                    configurations_processing[:] = [x for x in configurations_processing if x != configuration_which_finished]
+                    configurations_finished.append(configuration_which_finished)
+                    
+            # Increment band index for any band which has completely finished its jobs.
+            for bracket_index, bracket_statuses in enumerate(configuration_statuses_per_bracket_per_band):
+                band_index = band_indices[bracket_index]
+                if band_index >= len(bracket_statuses):
+                    continue
+                configurations_to_run = bracket_statuses[band_index]["to_process"]
+                configurations_processing = bracket_statuses[band_index]["processing"]
+                configurations_finished = bracket_statuses[band_index]["finished"]
+
+
+                # If we've found that we have no more processing configurations,
+                # transfer the top few finished configurations to the next band's
+                # to_process list
+                if len(configurations_to_run) + len(configurations_processing) == 0:
+
+                    # Remember to track indices
+                    band_indices[bracket_index] += 1
+                    
+                    # We've finished this entire bracket if this is true
+                    if band_index+1 >= len(bracket_statuses):
+                        continue
+
+                    next_bracket_to_process_list = bracket_statuses[band_index+1]["to_process"]
+                    n_to_transfer = min(self.hyperband_schedule[bracket_index][band_index+1][0],
+                                        len(configurations_finished))
+                    configurations_and_scores = [(config, configuration_results[config][-1]) for config in configurations_finished]
+                    configurations_and_scores.sort(key=lambda x:x[1], reverse=True)
+                    next_bracket_to_process_list.extend([x[0] for x in configurations_and_scores[:n_to_transfer]])                
+
+        # Terminate pool
+        for model_tester in model_testers:
+            model_tester.terminate()
+        
+        # Debug print
+        for configuration, score in configuration_results.items():
+            print(configuration, score)
+    
+        # Get the best configuration seen and create model 
+        # TODO(maxlam): clean up configuration results indexing by using a named tuple or something
+        all_configuration_and_scores = sorted(configuration_results.items(), key=lambda x: x[1][-1], reverse=True)
+        best_configuration_name = all_configuration_and_scores[0][1][-1]
+        opt_model = self.model_class(**self.model_class_params)
+        opt_model.load('{0}_{1}'.format(opt_model.name, int(best_configuration_name)), save_dir=self.save_dir)
+
+        # TODO(maxlam): Add results
+        return opt_model, None
+                
     def _fit_st(self, X_valid, Y_valid, b=0.5, beta=1,
         set_unlabeled_as_neg=True, eval_batch_size=None):
         """Single-threaded implementation of Hyperband"""
