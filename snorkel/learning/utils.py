@@ -621,8 +621,8 @@ class HyperbandSearch(object):
     :param seed: Random seed for random sampling of hyperparameters.
     """
     def __init__(self, model_class, parameter_dict, 
-                 hyperband_epochs_budget, 
                  X_train, Y_train=None, 
+                 hyperband_epochs_budget=100, 
                  hyperband_proportion_discard=3,
                  model_class_params={}, model_hyperparams={}, 
                  save_dir='checkpoints', seed=123):
