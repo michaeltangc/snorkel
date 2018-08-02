@@ -622,7 +622,7 @@ class HyperbandSearch(object):
     """
     def __init__(self, model_class, parameter_dict, 
                  X_train, Y_train=None, 
-                 hyperband_epochs_budget=100, 
+                 hyperband_epochs_budget=200, 
                  hyperband_proportion_discard=3,
                  model_class_params={}, model_hyperparams={}, 
                  save_dir='checkpoints', seed=123):
