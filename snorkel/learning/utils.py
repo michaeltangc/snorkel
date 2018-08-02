@@ -641,6 +641,10 @@ class HyperbandSearch(object):
         self.model_hyperparams  = model_hyperparams
         self.save_dir           = os.path.join(save_dir, 'grid_search')
 
+        # Random seed (only works for single threaded)
+        self.rand_state = np.random.RandomState()
+        self.rand_state.seed(seed)
+
         # Hyperband parameters
         self.hyperband_epochs_budget = hyperband_epochs_budget
         self.hyperband_proportion_discard = hyperband_proportion_discard
@@ -980,7 +984,9 @@ class HyperbandSearch(object):
             
             # Sample random configurations to seed SuccessiveHalving
             n_starting_configurations, _ = bracket[0]
-            configurations = [random.choice(all_configurations) for i in range(n_starting_configurations)]
+            #configurations = [random.choice(all_configurations) for i in range(n_starting_configurations)]
+            configurations = [all_configurations[self.rand_state.choice(list(range(len(all_configurations))))] 
+                              for i in range(n_starting_configurations)]
             best_configuration_name, best_score = None, float("-inf")
 
             # Successive Halving
