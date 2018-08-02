@@ -6,6 +6,7 @@ from future import standard_library
 standard_library.install_aliases()
 
 import os
+import time
 import math
 import random
 import numpy as np
@@ -364,6 +365,7 @@ class GridSearch(object):
         # Iterate over the param values
         run_stats = []
         run_score_opt = -1.0
+        start_time = time.time()
         for k, param_vals in enumerate(self.search_space()):
             hps = self.model_hyperparams.copy()
 
@@ -413,7 +415,8 @@ class GridSearch(object):
 
             # Add scores to running stats, print, and set as optimal if best
             print("[{0}] {1}: {2}".format(model.name,run_score_label,run_score))
-            run_stats.append(list(param_vals) + list(run_scores))
+            time_elapsed = time.time() - start_time
+            run_stats.append(list(param_vals) + list(run_scores) + [time_elapsed])
             if run_score > run_score_opt or k == 0:
                 model.save(model_name=model_name, save_dir=self.save_dir)
                 # Also save a separate file for easier access
@@ -432,7 +435,7 @@ class GridSearch(object):
             ['Prec.', 'Rec.', f_score]
         sort_by = 'Acc.' if opt_model.cardinality > 2 else f_score
         self.results = DataFrame.from_records(
-            run_stats, columns=self.param_names + run_score_labels
+            run_stats, columns=self.param_names + run_score_labels + ["time"]
         ).sort_values(by=sort_by, ascending=False)
         return opt_model, self.results
 
@@ -972,6 +975,7 @@ class HyperbandSearch(object):
         run_stats = []
 
         # Loop over each bracket
+        time_start = time.time()
         for bracket_index, bracket in enumerate(self.hyperband_schedule):
             
             # Sample random configurations to seed SuccessiveHalving
@@ -999,7 +1003,8 @@ class HyperbandSearch(object):
                                                                                      set_unlabeled_as_neg=set_unlabeled_as_neg,
                                                                                      eval_batch_size=eval_batch_size)
                     scored_configurations.append((model, score, model_name, configuration))
-                    run_stats.append(run_stat)
+                    time_elapsed = time.time() - time_start
+                    run_stats.append(run_stat + [time_elapsed])
                     model_id += 1
 
                 scored_configurations.sort(key=lambda x: x[1], reverse=True)
@@ -1030,7 +1035,7 @@ class HyperbandSearch(object):
             ['Prec.', 'Rec.', f_score]
         sort_by = 'Acc.' if opt_model.cardinality > 2 else f_score
         self.results = DataFrame.from_records(
-            run_stats, columns=self.param_names + run_score_labels
+            run_stats, columns=self.param_names + run_score_labels + ["time"]
         ).sort_values(by=sort_by, ascending=False)
 
         return opt_model, self.results
