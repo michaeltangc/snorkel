@@ -335,7 +335,7 @@ class GridSearch(object):
     def search_space(self):
         return product(*[self.parameter_dict[pn] for pn in self.param_names])
 
-    def fit(self, X_valid, Y_valid, b=0.5, beta=1, set_unlabeled_as_neg=True, 
+    def fit(self, X_valid, Y_valid, X_test=None, Y_test=None, b=0.5, beta=1, set_unlabeled_as_neg=True, 
         n_threads=1, eval_batch_size=None):
         """
         Runs grid search, constructing a new instance of model_class for each
@@ -343,6 +343,8 @@ class GridSearch(object):
         and validating on (X_valid, Y_valid). Selects the best model according
         to F1 score (binary) or accuracy (categorical).
 
+        :param X_test: X test set for evaluation (mostly for benchmarking)
+        :param Y_test: Y test set for evaluation for benchmarking
         :param b: Scoring decision threshold (binary)
         :param beta: F_beta score to select model by (binary)
         :param set_unlabeled_as_neg: Set labels = 0 -> -1 (binary)
@@ -350,16 +352,18 @@ class GridSearch(object):
         :param eval_batch_size: The batch_size for model evaluation
         """
         if n_threads > 1:
-            opt_model, run_stats = self._fit_mt(X_valid, Y_valid, b=b,
-                beta=beta, set_unlabeled_as_neg=set_unlabeled_as_neg,
-                n_threads=n_threads, eval_batch_size=eval_batch_size)
+            opt_model, run_stats = self._fit_mt(X_valid, Y_valid,
+                                                X_test=X_test, Y_test=Y_test, b=b,
+                                                beta=beta, set_unlabeled_as_neg=set_unlabeled_as_neg,
+                                                n_threads=n_threads, eval_batch_size=eval_batch_size)
         else:
-            opt_model, run_stats = self._fit_st(X_valid, Y_valid, b=b, 
-                beta=beta, set_unlabeled_as_neg=set_unlabeled_as_neg,
-                eval_batch_size=eval_batch_size)
+            opt_model, run_stats = self._fit_st(X_valid, Y_valid,
+                                                X_test=X_test, Y_test=Y_test, b=b,
+                                                beta=beta, set_unlabeled_as_neg=set_unlabeled_as_neg,
+                                                eval_batch_size=eval_batch_size)
         return opt_model, run_stats
 
-    def _fit_st(self, X_valid, Y_valid, b=0.5, beta=1,
+    def _fit_st(self, X_valid, Y_valid, X_test=None, Y_test=None, b=0.5, beta=1,
         set_unlabeled_as_neg=True, eval_batch_size=None):
         """Single-threaded implementation of `GridSearch.fit`."""
         # Iterate over the param values
@@ -400,15 +404,22 @@ class GridSearch(object):
                 model.train(*train_args, X_dev=X_valid, Y_dev=Y_valid, 
                     save_dir=self.save_dir, **hps)
             except:
-                model.train(*train_args, **hps)
+                model.train(*train_args, **hps)            
 
             # Test the model
             run_scores = model.score(X_valid, Y_valid, b=b, beta=beta,
                 set_unlabeled_as_neg=set_unlabeled_as_neg,
                 batch_size=eval_batch_size)
+            run_scores_test = []
+            if X_test is not None and Y_test is not None:
+                run_scores_test = model.score(X_test, Y_test, b=b, beta=beta,
+                                              set_unlabeled_as_neg=set_unlabeled_as_neg,
+                                              batch_size=eval_batch_size)
             if model.cardinality > 2:
                 run_score, run_score_label = run_scores, "Accuracy"
                 run_scores = [run_score]
+                if len(run_scores_test) > 0:
+                    run_scores_test = [run_scores_test]
             else:
                 run_score  = run_scores[-1]
                 run_score_label = "F-{0} Score".format(beta)
@@ -416,7 +427,7 @@ class GridSearch(object):
             # Add scores to running stats, print, and set as optimal if best
             print("[{0}] {1}: {2}".format(model.name,run_score_label,run_score))
             time_elapsed = time.time() - start_time
-            run_stats.append(list(param_vals) + list(run_scores) + [time_elapsed])
+            run_stats.append(list(param_vals) + list(run_scores) + list(run_scores_test) + [time_elapsed])
             if run_score > run_score_opt or k == 0:
                 model.save(model_name=model_name, save_dir=self.save_dir)
                 # Also save a separate file for easier access
@@ -434,12 +445,21 @@ class GridSearch(object):
         run_score_labels = ['Acc.'] if opt_model.cardinality > 2 else \
             ['Prec.', 'Rec.', f_score]
         sort_by = 'Acc.' if opt_model.cardinality > 2 else f_score
+
+        # If X_test and Y_test are not none, there are extra columns
+        # showing stats on the test set
+        if X_test is not None and Y_test is not None:
+            columns = (self.param_names + run_score_labels +
+                       ["Test " + x for x in run_score_labels]) + ["time"]
+        else:
+            columns = (self.param_names + run_score_labels + ["time"])
+        
         self.results = DataFrame.from_records(
-            run_stats, columns=self.param_names + run_score_labels + ["time"]
+            run_stats, columns=columns
         ).sort_values(by=sort_by, ascending=False)
         return opt_model, self.results
 
-    def _fit_mt(self, X_valid, Y_valid, b=0.5, beta=1, 
+    def _fit_mt(self, X_valid, Y_valid, X_test=None, Y_test=None, b=0.5, beta=1, 
         set_unlabeled_as_neg=True, n_threads=2, eval_batch_size=None):
         """Multi-threaded implementation of `GridSearch.fit`."""
         # First do a preprocessing pass over the data to make sure it is all
@@ -468,10 +488,11 @@ class GridSearch(object):
         ps = []
         for i in range(n_threads):
             p = ModelTester(self.model_class, self.model_class_params,
-                    params_queue, scores_queue, self.X_train, X_valid, Y_valid,
-                    Y_train=self.Y_train, b=b, save_dir=self.save_dir,
-                    set_unlabeled_as_neg=set_unlabeled_as_neg,
-                    eval_batch_size=eval_batch_size,beta = beta)
+                            params_queue, scores_queue, self.X_train, X_valid, Y_valid,
+                            X_test=X_test, Y_test=Y_test,
+                            Y_train=self.Y_train, b=b, save_dir=self.save_dir,
+                            set_unlabeled_as_neg=set_unlabeled_as_neg,
+                            eval_batch_size=eval_batch_size,beta = beta)
             p.start()
             ps.append(p)
 
@@ -511,19 +532,27 @@ class GridSearch(object):
         categorical = (len(scores) == 2)
         labels = ['Acc.'] if categorical else ['Prec.', 'Rec.', f_score]
         sort_by = 'Acc.' if categorical else f_score
+
+        # If X_test and Y_test are not none, there are extra columns
+        # showing stats on the test set
+        if X_test is not None and Y_test is not None:
+            columns = ["Model"] + self.param_names + ["Test " + x for x in labels] + labels
+        else:
+            columns = ["Model"] + self.param_names + labels
+        
         self.results = DataFrame.from_records(
-            run_stats, columns=["Model"] + self.param_names + labels
+            run_stats, columns=columns
         ).sort_values(by=sort_by, ascending=False)
         return model, self.results
-
 
 QUEUE_TIMEOUT = 3
 
 class ModelTester(Process):
     def __init__(self, model_class, model_class_params, params_queue, 
-        scores_queue, X_train, X_valid, Y_valid, Y_train=None, b=0.5, beta=1,
-        set_unlabeled_as_neg=True, save_dir='checkpoints',
-        eval_batch_size=None):
+                 scores_queue, X_train, X_valid, Y_valid, Y_train=None,
+                 X_test=None, Y_test=None, b=0.5, beta=1,
+                 set_unlabeled_as_neg=True, save_dir='checkpoints',
+                 eval_batch_size=None):
         Process.__init__(self)
         self.model_class = model_class
         self.model_class_params = model_class_params
@@ -533,6 +562,8 @@ class ModelTester(Process):
         self.Y_train = Y_train
         self.X_valid = X_valid
         self.Y_valid = Y_valid
+        self.X_test = X_test
+        self.Y_test = Y_test
         self.scorer_params = {
             'b': b,
             'beta': beta,
@@ -570,11 +601,21 @@ class ModelTester(Process):
                 # although probably not that much of a problem in practice...
                 model.save(model_name=model_name, save_dir=self.save_dir)
 
-                # Test the model
+                # Test the model on the dev set
                 run_scores = model.score(self.X_valid, self.Y_valid, 
-                    **self.scorer_params)
+                                         **self.scorer_params)
                 run_scores = [run_scores] if model.cardinality > 2 else \
-                    list(run_scores)
+                             list(run_scores)
+
+                # Test the model on the test set
+                if self.X_test is not None and self.Y_test is not None:
+                    run_scores_test = model.score(self.X_test, self.Y_test,
+                                                  **self.scorer_params)
+                    run_scores_test = [run_scores_test] if model.cardinality > 2 else \
+                                      list(run_scores)
+
+                    # We make sure that the last element in run stats is still dev score.
+                    run_scores = run_scores_test + run_scores
 
                 # Append score to out queue
                 self.scores_queue.put([k] + run_scores, True, QUEUE_TIMEOUT)
@@ -621,7 +662,7 @@ class HyperbandSearch(object):
     :param seed: Random seed for random sampling of hyperparameters.
     """
     def __init__(self, model_class, parameter_dict, 
-                 X_train, Y_train=None, 
+                 X_train, Y_train=None,
                  hyperband_epochs_budget=200, 
                  hyperband_proportion_discard=3,
                  model_class_params={}, model_hyperparams={}, 
@@ -729,7 +770,9 @@ class HyperbandSearch(object):
             schedule = [bracket] + schedule
         return schedule
 
-    def fit(self, X_valid, Y_valid, b=0.5, beta=1, set_unlabeled_as_neg=True, 
+    def fit(self, X_valid, Y_valid,
+            X_test=None, Y_test=None,
+            b=0.5, beta=1, set_unlabeled_as_neg=True, 
             n_threads=1, eval_batch_size=None):
         """
         Perform hyperband
@@ -743,11 +786,13 @@ class HyperbandSearch(object):
         
         # TODO(maxlam): implement multithreaded hyperband
         if n_threads > 1:
-            return self._fit_mt(X_valid, Y_valid, b=b,
+            return self._fit_mt(X_valid, Y_valid,
+                                X_test=X_test, Y_test=Y_test, b=b,
                                 beta=beta, set_unlabeled_as_neg=set_unlabeled_as_neg,
                                 eval_batch_size=eval_batch_size)
         
-        return self._fit_st(X_valid, Y_valid, b=b, 
+        return self._fit_st(X_valid, Y_valid,
+                            X_test=X_test, Y_test=Y_test, b=b,
                             beta=beta, set_unlabeled_as_neg=set_unlabeled_as_neg, 
                             eval_batch_size=eval_batch_size)
 
@@ -755,7 +800,8 @@ class HyperbandSearch(object):
         return product(*[self.parameter_dict[pn] for pn in self.param_names])
 
     def evaluate_configuration(self, configuration, model_id, 
-                               X_valid, Y_valid, b=0.5, beta=1,
+                               X_valid, Y_valid,
+                               X_test=None, Y_test=None, b=0.5, beta=1,
                                set_unlabeled_as_neg=True, eval_batch_size=None):
         """
         Evaluate configuration for n_epochs and test on X_valid and Y_valid. 
@@ -795,16 +841,24 @@ class HyperbandSearch(object):
         run_scores = model.score(X_valid, Y_valid, b=b, beta=beta,
             set_unlabeled_as_neg=set_unlabeled_as_neg,
             batch_size=eval_batch_size)
+        run_scores_test = []
+        if X_test is not None and Y_test is not None:
+            run_scores_test = model.score(X_test, Y_test, b=b, beta=beta,
+                                          set_unlabeled_as_neg=set_unlabeled_as_neg,
+                                          batch_size=eval_batch_size)
         if model.cardinality > 2:
             run_score, run_score_label = run_scores, "Accuracy"
             run_scores = [run_score]
+            if len(run_scores_test) > 0:
+                run_scores_test = [run_scores_test]
         else:
             run_score  = run_scores[-1]
             run_score_label = "F-{0} Score".format(beta)
 
-        return model, run_score, model_name, list(configuration) + list(run_scores)
+        return model, run_score, model_name, list(configuration) + list(run_scores) + list(run_scores_test)
 
-    def _fit_mt(self, X_valid, Y_valid, b=0.5, beta=1, 
+    def _fit_mt(self, X_valid, Y_valid,
+                X_test=None, Y_test=None, b=0.5, beta=1,
                 set_unlabeled_as_neg=True, n_threads=4, eval_batch_size=None):
         """
         Multi-threaded implementation of Hyperband.
@@ -827,7 +881,8 @@ class HyperbandSearch(object):
 
         # Create a pool of testers
         model_testers = [ModelTester(self.model_class, self.model_class_params,
-                                     params_queue, scores_queue, self.X_train, X_valid, Y_valid,
+                                     params_queue, scores_queue, self.X_train,
+                                     X_valid, Y_valid, X_test=X_test, Y_test=Y_test,
                                      Y_train=self.Y_train, b=b, save_dir=self.save_dir,
                                      set_unlabeled_as_neg=set_unlabeled_as_neg,
                                      eval_batch_size=eval_batch_size, beta=beta) for i in range(n_threads)]
@@ -970,7 +1025,7 @@ class HyperbandSearch(object):
         # TODO(maxlam): Add results
         return opt_model, None
                 
-    def _fit_st(self, X_valid, Y_valid, b=0.5, beta=1,
+    def _fit_st(self, X_valid, Y_valid, X_test=None, Y_test=None, b=0.5, beta=1,
         set_unlabeled_as_neg=True, eval_batch_size=None):
         """Single-threaded implementation of Hyperband"""
 
@@ -1004,7 +1059,8 @@ class HyperbandSearch(object):
                     configuration_list[self.param_names.index("epochs")] = r_i
 
                     model, score, model_name, run_stat = self.evaluate_configuration(configuration_list, model_id,
-                                                                                     X_valid, Y_valid, 
+                                                                                     X_valid, Y_valid,
+                                                                                     X_test=X_test, Y_test=Y_test,
                                                                                      b=b, beta=beta, 
                                                                                      set_unlabeled_as_neg=set_unlabeled_as_neg,
                                                                                      eval_batch_size=eval_batch_size)
@@ -1040,8 +1096,13 @@ class HyperbandSearch(object):
         run_score_labels = ['Acc.'] if opt_model.cardinality > 2 else \
             ['Prec.', 'Rec.', f_score]
         sort_by = 'Acc.' if opt_model.cardinality > 2 else f_score
+        if X_test is not None and Y_test is not None:
+            columns = (self.param_names + run_score_labels +
+                       ["Test " + x for x in run_score_labels] + ["time"])
+        else:
+            columns = self.param_names + run_score_labels + ["time"]
         self.results = DataFrame.from_records(
-            run_stats, columns=self.param_names + run_score_labels + ["time"]
+            run_stats, columns=columns,
         ).sort_values(by=sort_by, ascending=False)
 
         return opt_model, self.results
