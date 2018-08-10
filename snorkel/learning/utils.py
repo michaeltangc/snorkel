@@ -980,6 +980,7 @@ class HyperbandSearch(object):
 
         # Loop over each bracket
         time_start = time.time()
+        best_configuration_name, best_score = None, float("-inf")
         for bracket_index, bracket in enumerate(self.hyperband_schedule):
             
             # Sample random configurations to seed SuccessiveHalving
@@ -987,7 +988,6 @@ class HyperbandSearch(object):
             #configurations = [random.choice(all_configurations) for i in range(n_starting_configurations)]
             configurations = [all_configurations[self.rand_state.choice(list(range(len(all_configurations))))] 
                               for i in range(n_starting_configurations)]
-            best_configuration_name, best_score = None, float("-inf")
 
             # Successive Halving
             for band_index, (n_i, r_i) in enumerate(bracket):
