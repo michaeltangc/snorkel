@@ -1,4 +1,4 @@
-from utils import *
+from amc_utils import *
 import numpy as np
 
 def amc(O, O_inv, mu_true, thresh=0.2, nonzeros=3):

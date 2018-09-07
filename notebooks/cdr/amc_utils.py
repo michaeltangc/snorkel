@@ -1,5 +1,4 @@
 import numpy as np
-import cvxpy as cp
 import copy
 import time
 from math import exp
@@ -164,8 +163,13 @@ def solveMatrixCompletion(O_inv, deps):
     return l
 
 def calculate_empirical_mu(z,O):
-    c = 1 + z.dot(O.dot(z.T)) # check this
+    a = O.dot(z.T)
+    a = np.squeeze(np.asarray(a))
+    # print(a.shape)
+    # print(z.shape)
+    c = 1 + z.dot(a) # check this
     mu = 1/np.sqrt(c)*O.dot(z.T)
+    mu = np.squeeze(np.asarray(mu))
     return mu
 
 def solveMatrixCompletionWithMu(O_inv, O, deps):
