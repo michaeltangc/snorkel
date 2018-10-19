@@ -11,6 +11,7 @@ from snorkel.learning.pytorch import LSTM
 from snorkel.learning.structure import DependencySelector
 from snorkel.models import candidate_subclass
 
+from load_external_annotations import load_external_labels
 
 parser = argparse.ArgumentParser(description='Train an LSTM model on noisy labels with varying parameters.')
 parser.add_argument('--lfs_indices', type=str, default='1', help='indices of labelling functions to use in generative'
@@ -25,7 +26,7 @@ train_kwargs = {
     'lr':              0.01,
     'embedding_dim':   None,
     'hidden_dim':      None,
-    'n_epochs':        20,
+    'n_epochs':        30,
     'dropout':         0.5,
     'rebalance':       0.25,
     'print_freq':      5,
@@ -45,7 +46,10 @@ def load_features(session):
     train_cands = session.query(ChemicalDisease).filter(ChemicalDisease.split == 0).all()
     dev_cands = session.query(ChemicalDisease).filter(ChemicalDisease.split == 1).all()
     test_cands = session.query(ChemicalDisease).filter(ChemicalDisease.split == 2).all()
-    return train_cands, dev_cands, test_cands
+    L_gold_dev = load_gold_labels(session, annotator_name='gold', split=1)
+    load_external_labels(session, ChemicalDisease, split=2, annotator='gold')
+    L_gold_test = load_gold_labels(session, annotator_name='gold', split=2)
+    return train_cands, dev_cands, test_cands, L_gold_dev, L_gold_test
 
 
 def log_odd(alpha):
@@ -74,9 +78,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     session = SnorkelSession()
     # get data
-    train_cands, dev_cands, test_cands = load_features(session)
-    L_gold_dev = load_gold_labels(session, annotator_name='gold', split=1)
-    L_gold_test = load_gold_labels(session, annotator_name='gold', split=2)
+    train_cands, dev_cands, test_cands, L_gold_dev, L_gold_test = load_features(session)
     lfs_indices = [int(x) for x in args.lfs_indices.split(',')]
     L_train = load_label_matrix(args.datapath, lfs_indices, split='train')
     L_test = load_label_matrix(args.datapath, lfs_indices, split='test')
