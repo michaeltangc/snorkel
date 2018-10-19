@@ -5,9 +5,9 @@ import numpy as np
 
 SLEEP = 10
 CTR_LIM = 12
-procs_lim = 1
+procs_lim = 12
 l_vals = range(33)
-d_vals = [100]  # np.arange(10, 250, 10)
+d_vals = np.arange(10, 250, 10)
 script = 'train_model.py'
 datapath = 'cdr_data/'
 n_runs = 3  # (for labelling functions)
