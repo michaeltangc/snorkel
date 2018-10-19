@@ -13,7 +13,7 @@ from snorkel.models import candidate_subclass
 parser = argparse.ArgumentParser(description='Train an LSTM model on noisy labels with varying parameters.')
 parser.add_argument('--lfs_indices', type=str, default='1', help='indices of labelling functions to use in generative'
                                                                  'model.')
-parser.add_argument('--hidden_dim', type=int, default=50, help='dimension of the hidden dimension in the end model.')
+parser.add_argument('--hidden_dim', type=int, help='dimension of the hidden dimension in the end model.')
 parser.add_argument('--datapath', type=str, default='./data')
 parser.add_argument('--save_file', type=str, default='spouses_d.log')
 
@@ -23,7 +23,7 @@ args = parser.parse_args()
 train_kwargs = {'lr': 0.01,
                 'embedding_dim': None,
                 'hidden_dim': None,
-                'n_epochs': 10,
+                'n_epochs': 30,
                 'dropout': 0.25,
                 'seed': 1701
                 }
