@@ -89,12 +89,12 @@ if __name__ == '__main__':
     lfs_accuracies = stats['Accuracy']
     alpha_min = np.min(lfs_accuracies)
     alpha_max = np.max(lfs_accuracies)
-    r_L = log_odd(alpha_min) / log_odd(alpha_max)
+    r_L = round(log_odd(alpha_min) / log_odd(alpha_max), 4)
     gm_errors = gen_model.error_analysis(session, L_test, L_gold_test)
     dm_errors = lstm.error_analysis(session, test_cands, L_gold_test)
     gm_f1, gm_acc = get_metrics(gm_errors)
     dm_f1, dm_acc = get_metrics(dm_errors)
     # log metrics [l, d, r_L, alpha_L, gm_accuracy, dm_accuracy]
-    log_message = [len(lfs_indices), args.hidden_dim, r_L, alpha_max]
+    log_message = [len(lfs_indices), args.hidden_dim, r_L, round(alpha_max, 4)]
     log_message += [gm_f1, gm_acc, dm_f1, dm_acc]
     log_result(os.path.join(args.datapath, args.save_file), log_message)
