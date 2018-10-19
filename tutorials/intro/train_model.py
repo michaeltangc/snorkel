@@ -49,11 +49,11 @@ def log_odd(alpha):
 
 def get_metrics(error_metrics, eps=10e-8):
     tp, fp, tn, fn = len(error_metrics[0]), len(error_metrics[1]), len(error_metrics[2]), len(error_metrics[3])
-    acc = float(tp + fp) / float(tp + fp + tn + fn + eps)
+    acc = float(tp + tn) / float(tp + fp + tn + fn + eps)
     prec = float(tp) / (tp + fp + eps)
     rec = float(tp) / (tp + fn + eps)
     f1 = 2 * prec * rec / (prec + rec)
-    return round(acc, 4), round(f1, 4)
+    return round(f1, 4), round(acc, 4)
 
 
 def log_result(log_path, log_message):
