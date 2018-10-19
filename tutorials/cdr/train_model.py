@@ -8,25 +8,29 @@ from snorkel import SnorkelSession
 from snorkel.annotations import load_gold_labels
 from snorkel.learning import GenerativeModel
 from snorkel.learning.pytorch import LSTM
+from snorkel.learning.structure import DependencySelector
 from snorkel.models import candidate_subclass
+
 
 parser = argparse.ArgumentParser(description='Train an LSTM model on noisy labels with varying parameters.')
 parser.add_argument('--lfs_indices', type=str, default='1', help='indices of labelling functions to use in generative'
                                                                  'model.')
 parser.add_argument('--hidden_dim', type=int, default=50, help='dimension of the hidden dimension in the end model.')
 parser.add_argument('--datapath', type=str, default='./data')
-parser.add_argument('--save_file', type=str, default='spouses_d.log')
-
+parser.add_argument('--save_file', type=str, default='cdr_d.log')
 
 args = parser.parse_args()
 
-train_kwargs = {'lr': 0.01,
-                'embedding_dim': None,
-                'hidden_dim': None,
-                'n_epochs': 10,
-                'dropout': 0.25,
-                'seed': 1701
-                }
+train_kwargs = {
+    'lr':              0.01,
+    'embedding_dim':   None,
+    'hidden_dim':      None,
+    'n_epochs':        20,
+    'dropout':         0.5,
+    'rebalance':       0.25,
+    'print_freq':      5,
+    'seed':            1701
+}
 
 
 def load_label_matrix(datapath, label_indices, split):
@@ -37,10 +41,10 @@ def load_label_matrix(datapath, label_indices, split):
 
 
 def load_features(session):
-    Spouse = candidate_subclass('Spouse', ['person1', 'person2'])
-    train_cands = session.query(Spouse).filter(Spouse.split == 0).order_by(Spouse.id).all()
-    dev_cands = session.query(Spouse).filter(Spouse.split == 1).order_by(Spouse.id).all()
-    test_cands = session.query(Spouse).filter(Spouse.split == 2).order_by(Spouse.id).all()
+    ChemicalDisease = candidate_subclass('ChemicalDisease', ['chemical', 'disease'])
+    train_cands = session.query(ChemicalDisease).filter(ChemicalDisease.split == 0).all()
+    dev_cands = session.query(ChemicalDisease).filter(ChemicalDisease.split == 1).all()
+    test_cands = session.query(ChemicalDisease).filter(ChemicalDisease.split == 2).all()
     return train_cands, dev_cands, test_cands
 
 
@@ -77,7 +81,10 @@ if __name__ == '__main__':
     L_train = load_label_matrix(args.datapath, lfs_indices, split='train')
     L_test = load_label_matrix(args.datapath, lfs_indices, split='test')
     # train generative model
-    gen_model = GenerativeModel()
+    ds = DependencySelector()
+    deps = ds.select(L_train, threshold=0.1)
+    gen_model = GenerativeModel(lf_propensity=True)
+    gen_model.train(L_train, deps=deps, decay=0.95, step_size=0.1/L_train.shape[0], reg_param=0.0)
     gen_model.train(L_train, epochs=100, decay=0.95, step_size=0.1 / L_train.shape[0], reg_param=1e-6)
     train_marginals = gen_model.marginals(L_train)
     # train end model

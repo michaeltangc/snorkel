@@ -5,13 +5,13 @@ import numpy as np
 
 SLEEP = 10
 CTR_LIM = 12
-procs_lim = 12
-l_vals = range(10)
-d_vals = np.arange(10, 250, 10)
+procs_lim = 1
+l_vals = range(33)
+d_vals = [100]  # np.arange(10, 250, 10)
 script = 'train_model.py'
-datapath = 'spouses_data/'
+datapath = 'cdr_data/'
 n_runs = 3  # (for labelling functions)
-save_file = 'spouses_training_{}.log'
+save_file = 'cdr_training_{}.log'
 
 
 def num_procs_open(procs):
@@ -50,12 +50,13 @@ if __name__ == '__main__':
                 break
     # loop over l
     for l in l_vals:
+        break
         for _ in range(n_runs):
             l_indices = np.random.choice(l_vals, l+1, replace=False)
             j += 1
             proc_args = [
                 'python', script,
-                '--hidden_dim', str(50),
+                '--hidden_dim', str(100),
                 '--lfs_indices', ','.join([str(x) for x in l_indices]),
                 '--datapath', datapath,
                 '--save_file', save_file.format('l')]
