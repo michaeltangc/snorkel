@@ -10,7 +10,7 @@ l_vals = range(10)
 d_vals = np.arange(10, 250, 10)
 script = 'train_model.py'
 datapath = 'spouses_data/'
-n_runs = 1  # (for labelling functions)
+n_runs = 3  # (for labelling functions)
 
 
 def num_procs_open(procs):
