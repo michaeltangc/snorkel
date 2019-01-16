@@ -7,14 +7,14 @@ directory = os.path.dirname(os.path.abspath(__file__))
 
 # Extract version information
 path = os.path.join(directory, 'snorkel', '__init__.py')
-with open(path) as read_file:
+with open(path, encoding="utf-8") as read_file:
     text = read_file.read()
 pattern = re.compile(r"^__version__ = ['\"]([^'\"]*)['\"]", re.MULTILINE)
 version = pattern.search(text).group(1)
 
 # Extract long_description
 path = os.path.join(directory, 'README.md')
-with open(path) as read_file:
+with open(path, encoding="utf-8") as read_file:
     long_description = read_file.read()
 
 setuptools.setup(
