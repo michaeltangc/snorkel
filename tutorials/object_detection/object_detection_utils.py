@@ -153,7 +153,7 @@ def display_results(image_np, output_dict, category_index, min_score_thresh=0.1,
 
 def non_max_suppression_fast(boxes, overlapThresh):
     # Modified version
-    # original by Rosebrock, A. (2015)  (Faster) Non-Maximum Suppression in Python. https://www.pyimagesearch.com/2015/02/16/faster-non-maximum-suppression-python/
+    # original by Rosebrock, A. (2015). (Faster) Non-Maximum Suppression in Python. https://www.pyimagesearch.com/2015/02/16/faster-non-maximum-suppression-python/
     
     # if there are no boxes, return an empty list
     if len(boxes) == 0:
